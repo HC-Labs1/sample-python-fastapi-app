@@ -5,14 +5,12 @@ on:
     branches: [ "main" ]
 
 env:
-  AWS_REGION: us-east-1                 
+  AWS_REGION: us-east-1
   ECR_REPOSITORY: test-dev
   ECS_SERVICE: test-dev-service
   ECS_CLUSTER: test-dev
-  ECS_TASK_DEFINITION: test-dev
-                                               
-  CONTAINER_NAME: test-dev         
-                                               
+  ECS_TASK_DEFINITION_FAMILY: test-dev
+  CONTAINER_NAME: test-dev
 
 permissions:
   contents: read
@@ -24,7 +22,7 @@ jobs:
     environment: production
 
     steps:
-    - name: Checkout
+    - name: Checkout code
       uses: actions/checkout@v4
 
     - name: Configure AWS credentials
@@ -38,37 +36,51 @@ jobs:
       id: login-ecr
       uses: aws-actions/amazon-ecr-login@v1
 
-    - name: Build, tag, and push image to Amazon ECR
+    - name: Build, tag, and push Docker image
       id: build-image
       env:
-        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         IMAGE_TAG: ${{ github.sha }}
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
       run: |
-        # Build a docker container and
-        # push it to ECR so that it can
-        # be deployed to ECS.
-        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-        docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
-        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+        IMAGE_URI=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+        docker build -t $IMAGE_URI .
+        docker tag $IMAGE_URI $ECR_REGISTRY/$ECR_REPOSITORY:latest
+        docker push $IMAGE_URI
         docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
         echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:latest" >> $GITHUB_OUTPUT
 
-    - name: Get current task definition JSON from AWS
-      run: aws ecs describe-task-definition --task-definition test-dev:2 --region us-east-1 > task-def.json
+    - name: Get current task definition
+      run: |
+        aws ecs describe-task-definition \
+          --task-definition $ECS_TASK_DEFINITION_FAMILY \
+          --region $AWS_REGION \
+          --query taskDefinition \
+          --output json > task-def.json
 
-    - name: Update image in task definition JSON
-      id: task-def
+    - name: Update container image in task definition
+      id: update-task-def
       run: |
         IMAGE=${{ steps.build-image.outputs.image }}
-        # Update container image with jq; assumes containerDefinitions[0] is your container
-        jq --arg IMAGE "$IMAGE" '.containerDefinitions[0].image=$IMAGE |
-            {family, taskRoleArn, executionRoleArn, networkMode, containerDefinitions, requiresCompatibilities, cpu, memory}' task-def.json > new-task-def.json
-      shell: bash
+        jq --arg IMAGE "$IMAGE" --arg CONTAINER "${{ env.CONTAINER_NAME }}" '
+          .containerDefinitions |= map(
+            if .name == $CONTAINER then .image = $IMAGE else . end
+          ) |
+          {family, taskRoleArn, executionRoleArn, networkMode, containerDefinitions, requiresCompatibilities, cpu, memory}
+        ' task-def.json > new-task-def.json
 
-    - name: Deploy new task definition to ECS
+    - name: Register new task definition and deploy
       run: |
-        NEW_TASK_DEF_ARN=$(aws ecs register-task-definition --cli-input-json file://new-task-def.json --region ${{ env.AWS_REGION }} --query 'taskDefinition.taskDefinitionArn' --output text)
-        echo "New task definition ARN: $NEW_TASK_DEF_ARN"
+        NEW_TASK_DEF_ARN=$(aws ecs register-task-definition \
+          --cli-input-json file://new-task-def.json \
+          --region $AWS_REGION \
+          --query 'taskDefinition.taskDefinitionArn' \
+          --output text)
 
-        aws ecs update-service --cluster ${{ env.ECS_CLUSTER }} --service ${{ env.ECS_SERVICE }} --task-definition $NEW_TASK_DEF_ARN --force-new-deployment --region ${{ env.AWS_REGION }}
-      shell: bash
+        echo "Registered task def: $NEW_TASK_DEF_ARN"
+
+        aws ecs update-service \
+          --cluster $ECS_CLUSTER \
+          --service $ECS_SERVICE \
+          --task-definition $NEW_TASK_DEF_ARN \
+          --region $AWS_REGION \
+          --force-new-deployment
