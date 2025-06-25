@@ -5,6 +5,7 @@ services:
     build: .
     ports:
       - "8000:8000"
+    command: uvicorn app:app --host 0.0.0.0 --port 8000
     environment:
       - S3=your_s3_bucket
       - DATABASE_URL=your_database_url

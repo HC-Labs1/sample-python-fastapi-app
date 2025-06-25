@@ -13,9 +13,12 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 
 app = FastAPI()
 
-# Mount Django at /django (optional, for demonstration)
 app.mount("/django", WSGIMiddleware(get_wsgi_application()))
 
 @app.get("/health")
 def health():
     return JSONResponse({"status": "ok"})
+
+@app.get("/")
+def root():
+    return {"message": "Hello, World!"}
