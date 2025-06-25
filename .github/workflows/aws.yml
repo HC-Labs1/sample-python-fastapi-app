@@ -6,12 +6,12 @@ on:
 
 env:
   AWS_REGION: us-east-1                 
-  ECR_REPOSITORY: MY_ECR_REPOSITORY
-  ECS_SERVICE: MY_ECS_SERVICE             
-  ECS_CLUSTER: MY_ECS_CLUSTER           
-  ECS_TASK_DEFINITION: MY_ECS_TASK_DEFINITION
+  ECR_REPOSITORY: 084828581506.dkr.ecr.us-east-1.amazonaws.com/test-dev
+  ECS_SERVICE: test-dev-service
+  ECS_CLUSTER: test-dev
+  ECS_TASK_DEFINITION: test-dev
                                                
-  CONTAINER_NAME: MY_CONTAINER_NAME         
+  CONTAINER_NAME: test-dev         
                                                
 
 permissions:
