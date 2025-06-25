@@ -48,26 +48,35 @@ jobs:
         docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
         echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:latest" >> $GITHUB_OUTPUT
 
-    - name: Get current task definition
+    - name: Get containerDefinitions from existing task definition
       run: |
         aws ecs describe-task-definition \
-          --task-definition $ECS_TASK_DEFINITION_FAMILY \
+          --task-definition $ECS_TASK_DEFINITION_FAMILY:1 \
           --region $AWS_REGION \
-          --query taskDefinition \
-          --output json > task-def.json
+          --query "taskDefinition.containerDefinitions" \
+          --output json > container-def.json
 
-    - name: Update container image in task definition
-      id: update-task-def
+    - name: Create full new task definition file with updated image
       run: |
         IMAGE=${{ steps.build-image.outputs.image }}
         CONTAINER=${{ env.CONTAINER_NAME }}
 
-        jq --arg IMAGE "$IMAGE" --arg CONTAINER "$CONTAINER" '
-          .containerDefinitions |= map(
-            if .name == $CONTAINER then .image = $IMAGE else . end
-          ) |
-          with_entries(select(.value != null))
-        ' task-def.json > new-task-def.json
+        UPDATED_CONTAINERS=$(jq --arg IMAGE "$IMAGE" --arg CONTAINER "$CONTAINER" '
+          map(if .name == $CONTAINER then .image = $IMAGE else . end)
+        ' container-def.json)
+
+        cat > new-task-def.json <<EOF
+{
+  "family": "${ECS_TASK_DEFINITION_FAMILY}",
+  "networkMode": "bridge",
+  "requiresCompatibilities": ["EC2"],
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "arn:aws:iam::084828581506:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::084828581506:role/ecsTaskExecutionRole",
+  "containerDefinitions": $UPDATED_CONTAINERS
+}
+EOF
 
     - name: Register new task definition and deploy
       run: |
