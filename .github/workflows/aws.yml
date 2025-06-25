@@ -17,9 +17,8 @@ permissions:
 
 jobs:
   deploy:
-    name: Deploy
+    name: Deploy to ECS
     runs-on: ubuntu-latest
-    environment: production
 
     steps:
     - name: Checkout code
@@ -61,11 +60,13 @@ jobs:
       id: update-task-def
       run: |
         IMAGE=${{ steps.build-image.outputs.image }}
-        jq --arg IMAGE "$IMAGE" --arg CONTAINER "${{ env.CONTAINER_NAME }}" '
+        CONTAINER=${{ env.CONTAINER_NAME }}
+
+        jq --arg IMAGE "$IMAGE" --arg CONTAINER "$CONTAINER" '
           .containerDefinitions |= map(
             if .name == $CONTAINER then .image = $IMAGE else . end
           ) |
-          {family, taskRoleArn, executionRoleArn, networkMode, containerDefinitions, requiresCompatibilities, cpu, memory}
+          with_entries(select(.value != null))
         ' task-def.json > new-task-def.json
 
     - name: Register new task definition and deploy
@@ -76,7 +77,7 @@ jobs:
           --query 'taskDefinition.taskDefinitionArn' \
           --output text)
 
-        echo "Registered task def: $NEW_TASK_DEF_ARN"
+        echo "Registered task definition: $NEW_TASK_DEF_ARN"
 
         aws ecs update-service \
           --cluster $ECS_CLUSTER \
