@@ -1,0 +1,10 @@
+version: "3.9"
+
+services:
+  web:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - S3=your_s3_bucket
+      - DATABASE_URL=your_database_url
