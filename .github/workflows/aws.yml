@@ -5,20 +5,21 @@ on:
     branches: [ "main" ]
 
 env:
-  AWS_REGION: us-east-1
+  AWS_REGION: us-east-1                 
   ECR_REPOSITORY: test-dev
   ECS_SERVICE: test-dev-service
   ECS_CLUSTER: test-dev
-  ECS_TASK_DEFINITION_FAMILY: test-dev
-  CONTAINER_NAME: test-dev
+  ECS_TASK_DEFINITION: test-dev
+  CONTAINER_NAME: test-dev         
 
 permissions:
   contents: read
 
 jobs:
   deploy:
-    name: Deploy to ECS
+    name: Deploy
     runs-on: ubuntu-latest
+    environment: production
 
     steps:
     - name: Checkout code
@@ -35,66 +36,36 @@ jobs:
       id: login-ecr
       uses: aws-actions/amazon-ecr-login@v1
 
-    - name: Build, tag, and push Docker image
+    - name: Build, tag, and push image to Amazon ECR
       id: build-image
       env:
-        IMAGE_TAG: ${{ github.sha }}
         ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: ${{ github.sha }}
       run: |
-        IMAGE_URI=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-        docker build -t $IMAGE_URI .
-        docker tag $IMAGE_URI $ECR_REGISTRY/$ECR_REPOSITORY:latest
-        docker push $IMAGE_URI
-        docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
-        echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:latest" >> $GITHUB_OUTPUT
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+        echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
-    - name: Get containerDefinitions from existing task definition
+    - name: Download current ECS task definition
       run: |
         aws ecs describe-task-definition \
-          --task-definition $ECS_TASK_DEFINITION_FAMILY:1 \
-          --region $AWS_REGION \
-          --query "taskDefinition.containerDefinitions" \
-          --output json > container-def.json
+          --task-definition ${{ env.ECS_TASK_DEFINITION }} \
+          --region ${{ env.AWS_REGION }} \
+          --query "taskDefinition" \
+          --output json > task-def.json
 
-    - name: Create full new task definition file with updated image
-      run: |
-        IMAGE=${{ steps.build-image.outputs.image }}
-        CONTAINER=${{ env.CONTAINER_NAME }}
+    - name: Fill in the new image ID in the ECS task definition
+      id: task-def
+      uses: aws-actions/amazon-ecs-render-task-definition@v1
+      with:
+        task-definition: task-def.json
+        container-name: ${{ env.CONTAINER_NAME }}
+        image: ${{ steps.build-image.outputs.image }}
 
-        # Update image in container definitions
-        jq --arg IMAGE "$IMAGE" --arg CONTAINER "$CONTAINER" '
-          map(if .name == $CONTAINER then .image = $IMAGE else . end)
-        ' container-def.json > updated-containers.json
-
-        # Inject into new task def JSON
-        jq --arg family "$ECS_TASK_DEFINITION_FAMILY" \
-           --arg exec_role "arn:aws:iam::084828581506:role/ecsTaskExecutionRole" \
-           --arg task_role "arn:aws:iam::084828581506:role/ecsTaskExecutionRole" \
-           --argjson containers "$(cat updated-containers.json)" '
-        {
-          family: $family,
-          networkMode: "bridge",
-          requiresCompatibilities: ["EC2"],
-          cpu: "256",
-          memory: "512",
-          executionRoleArn: $exec_role,
-          taskRoleArn: $task_role,
-          containerDefinitions: $containers
-        }' > new-task-def.json
-
-    - name: Register new task definition and deploy
-      run: |
-        NEW_TASK_DEF_ARN=$(aws ecs register-task-definition \
-          --cli-input-json file://new-task-def.json \
-          --region $AWS_REGION \
-          --query 'taskDefinition.taskDefinitionArn' \
-          --output text)
-
-        echo "Registered task definition: $NEW_TASK_DEF_ARN"
-
-        aws ecs update-service \
-          --cluster $ECS_CLUSTER \
-          --service $ECS_SERVICE \
-          --task-definition $NEW_TASK_DEF_ARN \
-          --region $AWS_REGION \
-          --force-new-deployment
+    - name: Deploy ECS task definition
+      uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+      with:
+        task-definition: ${{ steps.task-def.outputs.task-definition }}
+        service: ${{ env.ECS_SERVICE }}
+        cluster: ${{ env.ECS_CLUSTER }}
+        wait-for-service-stability: true
