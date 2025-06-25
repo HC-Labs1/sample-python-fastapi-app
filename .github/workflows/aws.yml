@@ -61,22 +61,26 @@ jobs:
         IMAGE=${{ steps.build-image.outputs.image }}
         CONTAINER=${{ env.CONTAINER_NAME }}
 
-        UPDATED_CONTAINERS=$(jq --arg IMAGE "$IMAGE" --arg CONTAINER "$CONTAINER" '
+        # Update image in container definitions
+        jq --arg IMAGE "$IMAGE" --arg CONTAINER "$CONTAINER" '
           map(if .name == $CONTAINER then .image = $IMAGE else . end)
-        ' container-def.json)
+        ' container-def.json > updated-containers.json
 
-        cat > new-task-def.json <<EOF
-{
-  "family": "${ECS_TASK_DEFINITION_FAMILY}",
-  "networkMode": "bridge",
-  "requiresCompatibilities": ["EC2"],
-  "cpu": "256",
-  "memory": "512",
-  "executionRoleArn": "arn:aws:iam::084828581506:role/ecsTaskExecutionRole",
-  "taskRoleArn": "arn:aws:iam::084828581506:role/ecsTaskExecutionRole",
-  "containerDefinitions": $UPDATED_CONTAINERS
-}
-EOF
+        # Inject into new task def JSON
+        jq --arg family "$ECS_TASK_DEFINITION_FAMILY" \
+           --arg exec_role "arn:aws:iam::084828581506:role/ecsTaskExecutionRole" \
+           --arg task_role "arn:aws:iam::084828581506:role/ecsTaskExecutionRole" \
+           --argjson containers "$(cat updated-containers.json)" '
+        {
+          family: $family,
+          networkMode: "bridge",
+          requiresCompatibilities: ["EC2"],
+          cpu: "256",
+          memory: "512",
+          executionRoleArn: $exec_role,
+          taskRoleArn: $task_role,
+          containerDefinitions: $containers
+        }' > new-task-def.json
 
     - name: Register new task definition and deploy
       run: |
